@@ -14,6 +14,9 @@ let
         ("The option `keyFile` is deprecated."
           + "Use passwordFile instead if you want to use interactive login or settings.keyFile if you want to use key file login")
         config.keyFile
+    else if config.clevisPin != null
+    # use a temporary provisioning passphrase if clevis is the only unlocking method
+    then ''<(echo -n "clevisTempPassphrase")''
     else null;
   keyFileArgs = ''
     ${lib.optionalString (keyFile != null) "--key-file ${keyFile}"} \
@@ -60,6 +63,18 @@ in
       type = lib.types.bool;
       default = config.keyFile == null && config.passwordFile == null && (! config.settings ? "keyFile");
       description = "Whether to ask for a password for initial encryption";
+    };
+    clevisPin = lib.mkOption {
+      type = lib.types.nullOr (lib.types.enum ["tpm2" "tang" "sss"]);
+      default = null;
+      description = "Pin the encrypted volume to a clevis backend";
+      example = "tang";
+    };
+    clevisPinConfig = lib.mkOption {
+      type = lib.types.nullOr lib.types.str;
+      default = "{}";
+      description = "Configuration for the clevis backend";
+      example = "{\"url\": \"http://tang-server\"}";
     };
     settings = lib.mkOption {
       default = { };
@@ -132,6 +147,12 @@ in
         ${toString (lib.forEach config.additionalKeyFiles (keyFile: ''
           cryptsetup luksAddKey ${config.device} ${keyFile} ${keyFileArgs}
         ''))}
+        ${lib.optionalString (config.clevisPin) ''
+          clevis luks bind -d ${config.device} ${config.clevisPin} '${config.clevisPinConfig}'
+        ''}
+        ${lib.optionalString (config.clevisPin && (! config.settings ? "keyFile") && (! config.askPassword) && (! config.passwordFile) && (! config.keyFile))
+        # Remove temporary provisioning passphrase if clevis is the only unlocking method
+        ''cryptsetup luksRemoveKey ${config.device} ${keyFile}''}
         ${lib.optionalString (config.content != null) config.content._create}
       '';
     };
@@ -169,14 +190,24 @@ in
             inherit (config) device;
           } // config.settings;
         }
-      ]) ++ (lib.optional (config.content != null) config.content._config);
+        ])
+        ++ (lib.optional (config.initrdUnlock && (config.clevisPin != null)) [{
+          boot.initrd.clevis.enable = true;
+          boot.initrd.clevis.devices.${config.name} = {};
+        }])
+        ++ (lib.optional (config.initrdUnlock && (config.clevisPin == "tang")) [{
+          boot.initrd.clevis.useTang = true;
+        }])
+        ++ (lib.optional (config.content != null) config.content._config);
       description = "NixOS configuration";
     };
     _pkgs = lib.mkOption {
       internal = true;
       readOnly = true;
       type = lib.types.functionTo (lib.types.listOf lib.types.package);
-      default = pkgs: [ pkgs.cryptsetup ] ++ (lib.optionals (config.content != null) (config.content._pkgs pkgs));
+      default = pkgs: [ pkgs.cryptsetup ]
+        ++ (lib.optionals (config.clevisPin != null) [ pkgs.clevis ])
+        ++ (lib.optionals (config.content != null) (config.content._pkgs pkgs));
       description = "Packages";
     };
   };
