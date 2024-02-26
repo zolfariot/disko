@@ -15,8 +15,11 @@ let
           + "Use passwordFile instead if you want to use interactive login or settings.keyFile if you want to use key file login")
         config.keyFile
     else if config.clevisPin != null
-    # use a temporary provisioning passphrase if clevis is the only unlocking method
-    then ''<(echo -n "clevisTempPassphrase")''
+    then
+      lib.warn
+        ("You are using clevisPin only without any passphrase or keyFile."
+          + "If you loose access to your pins the data on your disk will be lost")
+        ''<(echo -n "clevis-temp-passphrase")''
     else null;
   keyFileArgs = ''
     ${lib.optionalString (keyFile != null) "--key-file ${keyFile}"} \
@@ -61,7 +64,7 @@ in
     };
     askPassword = lib.mkOption {
       type = lib.types.bool;
-      default = config.keyFile == null && config.passwordFile == null && (! config.settings ? "keyFile");
+      default = config.keyFile == null && config.passwordFile == null && (! config.settings ? "keyFile") && (config.clevisPin == null);
       description = "Whether to ask for a password for initial encryption";
     };
     clevisPin = lib.mkOption {
@@ -108,7 +111,7 @@ in
     extraOpenArgs = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      description = "Extra arguments to pass to `cryptsetup luksOpen` when opening";
+      description = "Extra arguments to pass to `cryptsetup open` when opening";
       example = [ "--timeout 10" ];
     };
     content = diskoLib.deviceType { parent = config; device = "/dev/mapper/${config.name}"; };
@@ -128,7 +131,7 @@ in
       inherit config options;
       default = ''
         ${lib.optionalString config.askPassword ''
-          set +x
+          set -x
           askPassword() {
             echo "Enter password for ${config.device}: "
             IFS= read -r -s password
@@ -147,12 +150,13 @@ in
         ${toString (lib.forEach config.additionalKeyFiles (keyFile: ''
           cryptsetup luksAddKey ${config.device} ${keyFile} ${keyFileArgs}
         ''))}
-        ${lib.optionalString (config.clevisPin != null) ''
-          clevis luks bind -d ${config.device} ${config.clevisPin} '${config.clevisPinConfig}'
+        ${lib.optionalString (config.clevisPin != null && keyFile != ''<(echo -n "clevis-temp-passphrase")'') ''
+          cryptsetup luksAddKey ${config.device} <(echo -n "clevis-temp-passphrase") ${keyFileArgs}
         ''}
-        ${lib.optionalString (config.clevisPin != null && (! config.settings ? "keyFile") && (! config.askPassword) && (config.passwordFile == null) && (config.keyFile == null))
-        # Remove temporary provisioning passphrase if clevis is the only unlocking method
-        ''cryptsetup luksRemoveKey ${config.device} ${keyFile}''}
+        ${lib.optionalString (config.clevisPin != null) ''
+          clevis luks bind -y -k - -d ${config.device} ${config.clevisPin} '${config.clevisPinConfig}' <<< clevis-temp-passphrase
+          cryptsetup luksRemoveKey ${config.device} <(echo -n "clevis-temp-passphrase")
+        ''}
         ${lib.optionalString (config.content != null) config.content._create}
       '';
     };
