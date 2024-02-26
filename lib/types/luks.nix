@@ -147,10 +147,10 @@ in
         ${toString (lib.forEach config.additionalKeyFiles (keyFile: ''
           cryptsetup luksAddKey ${config.device} ${keyFile} ${keyFileArgs}
         ''))}
-        ${lib.optionalString (config.clevisPin) ''
+        ${lib.optionalString (config.clevisPin != null) ''
           clevis luks bind -d ${config.device} ${config.clevisPin} '${config.clevisPinConfig}'
         ''}
-        ${lib.optionalString (config.clevisPin && (! config.settings ? "keyFile") && (! config.askPassword) && (! config.passwordFile) && (! config.keyFile))
+        ${lib.optionalString (config.clevisPin != null && (! config.settings ? "keyFile") && (! config.askPassword) && (config.passwordFile == null) && (config.keyFile == null))
         # Remove temporary provisioning passphrase if clevis is the only unlocking method
         ''cryptsetup luksRemoveKey ${config.device} ${keyFile}''}
         ${lib.optionalString (config.content != null) config.content._create}
